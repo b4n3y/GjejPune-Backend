@@ -164,7 +164,7 @@ router.get('/conversations', auth, async (req, res) => {
             as: 'user'
           }
         },
-        // Lookup minimal job details
+
         {
           $lookup: {
             from: 'jobs',
@@ -204,7 +204,7 @@ router.get('/conversations', auth, async (req, res) => {
             as: 'job'
           }
         },
-        // Project only needed fields
+
         {
           $project: {
             _id: 1,
