@@ -20,9 +20,6 @@ const jobCategorySchema = new mongoose.Schema({
   }
 });
 
-jobCategorySchema.index({ name: 1 });
-jobCategorySchema.index({ slug: 1 });
-
 // Text index for search
 jobCategorySchema.index(
   { name: 'text', description: 'text' },

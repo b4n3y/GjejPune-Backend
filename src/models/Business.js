@@ -114,7 +114,6 @@ businessSchema.methods.comparePassword = async function(candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-businessSchema.index({ email: 1 });
 businessSchema.index({ businessName: 1 });
 businessSchema.index({ 'contactPerson.phoneNumber': 1 });
 businessSchema.index({ approved: 1 });

@@ -114,11 +114,39 @@ router.post('/', auth, ensureBusiness, async (req, res) => {
   try {
     const { title, description, requirements, salary, category } = req.body;
 
+    // Validate required fields
+    const requiredFields = {
+      title: title?.trim(),
+      description: description?.trim(),
+      requirements: Array.isArray(requirements) ? requirements.filter(r => r?.trim()).length > 0 : false,
+      salary: salary?.trim(),
+      category: category?.trim()
+    };
+
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value)
+      .map(([field]) => field);
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        details: `The following fields are required: ${missingFields.join(', ')}`
+      });
+    }
+
+    // Validate requirements array
+    if (!Array.isArray(requirements)) {
+      return res.status(400).json({
+        error: 'Invalid requirements format',
+        details: 'Requirements must be an array of strings'
+      });
+    }
+
     // Reject if someone tries to set approved to true
     if (req.body.approved === true) {
       return res.status(403).json({ 
         error: 'Not allowed',
-        message: 'Setting approved status is not allowed. Jobs must go through the approval process.'
+        details: 'Setting approved status is not allowed. Jobs must go through the approval process.'
       });
     }
 
@@ -130,7 +158,8 @@ router.post('/', auth, ensureBusiness, async (req, res) => {
 
     if (!jobCategory) {
       return res.status(400).json({ 
-        error: 'Invalid job category'
+        error: 'Invalid category',
+        details: 'The specified job category does not exist'
       });
     }
 
@@ -139,7 +168,7 @@ router.post('/', auth, ensureBusiness, async (req, res) => {
       businessId: req.userId,
       title: title.trim(),
       description: description.trim(),
-      requirements: requirements.map(req => req.trim()),
+      requirements: requirements.map(req => req.trim()).filter(req => req), // Remove empty requirements
       salary: salary.trim(),
       category,
       approved: false
@@ -181,11 +210,23 @@ router.post('/', auth, ensureBusiness, async (req, res) => {
 
     res.status(201).json(savedJob);
   } catch (error) {
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ error: error.message });
-    }
     console.error('Job creation error:', error);
-    res.status(500).json({ error: 'Server error' });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        error: 'Validation error',
+        details: Object.values(error.errors).map(err => err.message)
+      });
+    }
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        error: 'Invalid data format',
+        details: `Invalid format for field: ${error.path}`
+      });
+    }
+    res.status(500).json({ 
+      error: 'Server error',
+      details: 'An unexpected error occurred while creating the job posting'
+    });
   }
 });
 
@@ -310,6 +351,33 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', auth, ensureBusiness, async (req, res) => {
   try {
     const { title, description, requirements, salary } = req.body;
+
+    // Validate required fields
+    const requiredFields = {
+      title: title?.trim(),
+      description: description?.trim(),
+      requirements: Array.isArray(requirements) ? requirements.filter(r => r?.trim()).length > 0 : false,
+      salary: salary?.trim()
+    };
+
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value)
+      .map(([field]) => field);
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        details: `The following fields are required: ${missingFields.join(', ')}`
+      });
+    }
+
+    // Validate requirements array
+    if (!Array.isArray(requirements)) {
+      return res.status(400).json({
+        error: 'Invalid requirements format',
+        details: 'Requirements must be an array of strings'
+      });
+    }
     
     const job = await Job.findOne({
       _id: req.params.id,
@@ -317,21 +385,37 @@ router.put('/:id', auth, ensureBusiness, async (req, res) => {
     });
 
     if (!job) {
-      return res.status(404).json({ error: 'Job not found or unauthorized' });
+      return res.status(404).json({ 
+        error: 'Job not found',
+        details: 'The job posting was not found or you do not have permission to edit it'
+      });
     }
 
-    job.title = title;
-    job.description = description;
-    job.requirements = requirements;
-    job.salary = salary;
+    job.title = title.trim();
+    job.description = description.trim();
+    job.requirements = requirements.map(req => req.trim()).filter(req => req);
+    job.salary = salary.trim();
 
     await job.save();
     res.json(job);
   } catch (error) {
+    console.error('Job update error:', error);
     if (error.name === 'ValidationError') {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ 
+        error: 'Validation error',
+        details: Object.values(error.errors).map(err => err.message)
+      });
     }
-    res.status(500).json({ error: 'Server error' });
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        error: 'Invalid data format',
+        details: `Invalid format for field: ${error.path}`
+      });
+    }
+    res.status(500).json({ 
+      error: 'Server error',
+      details: 'An unexpected error occurred while updating the job posting'
+    });
   }
 });
 
@@ -390,29 +474,49 @@ router.post('/:id/apply', auth, upload.single('cv'), async (req, res) => {
     const userId = req.userId;
     const { coverLetter } = req.body;
 
+    // Validate cover letter
+    if (!coverLetter?.trim()) {
+      return res.status(400).json({
+        error: 'Missing cover letter',
+        details: 'A cover letter is required for your job application'
+      });
+    }
+
     // Check if job exists and is approved
     const job = await Job.findOne({ _id: jobId, approved: true })
       .populate('businessId', 'businessName')
       .lean();
 
     if (!job) {
-      return res.status(404).json({ error: 'Job not found or not approved' });
+      return res.status(404).json({ 
+        error: 'Job not found',
+        details: 'The job posting was not found or is not yet approved'
+      });
     }
 
     if (!job.businessId) {
-      return res.status(400).json({ error: 'Invalid job posting: no business associated' });
+      return res.status(400).json({ 
+        error: 'Invalid job posting',
+        details: 'This job posting is invalid as it has no associated business'
+      });
     }
 
     // Get user data
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ 
+        error: 'User not found',
+        details: 'Your user account could not be found'
+      });
     }
 
     // Check if user has already applied
     const existingApplication = await JobApplication.findOne({ userId, jobId });
     if (existingApplication) {
-      return res.status(400).json({ error: 'You have already applied for this job' });
+      return res.status(400).json({ 
+        error: 'Duplicate application',
+        details: 'You have already applied for this job'
+      });
     }
 
     // Check if user has a CV
@@ -424,15 +528,18 @@ router.post('/:id/apply', auth, upload.single('cv'), async (req, res) => {
         cvUrl = await uploadFile(req.file, 'cvs');
       } catch (error) {
         console.error('CV upload error:', error);
-        return res.status(500).json({ error: 'Failed to upload CV' });
+        return res.status(500).json({ 
+          error: 'CV upload failed',
+          details: 'Failed to upload your CV. Please try again.'
+        });
       }
     }
 
     // Ensure CV exists either from user profile or upload
     if (!cvUrl) {
       return res.status(400).json({ 
-        error: 'CV is required',
-        message: 'Please upload a CV with your application or add one to your profile'
+        error: 'CV required',
+        details: 'Please upload a CV with your application or add one to your profile first'
       });
     }
 
@@ -442,7 +549,7 @@ router.post('/:id/apply', auth, upload.single('cv'), async (req, res) => {
       jobId,
       cv: cvUrl,
       phoneNumber: user.phoneNumber,
-      coverLetter
+      coverLetter: coverLetter.trim()
     });
 
     await application.save();
@@ -484,17 +591,35 @@ router.post('/:id/apply', auth, upload.single('cv'), async (req, res) => {
       },
       status: application.status,
       cv: cvUrl,
-      coverLetter,
+      coverLetter: application.coverLetter,
       appliedAt: application.appliedAt
     };
 
     res.status(201).json(cleanedApplication);
   } catch (error) {
     console.error('Job application error:', error);
-    if (error.code === 11000) {
-      return res.status(400).json({ error: 'You have already applied for this job' });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        error: 'Validation error',
+        details: Object.values(error.errors).map(err => err.message)
+      });
     }
-    res.status(500).json({ error: 'Server error' });
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        error: 'Invalid data format',
+        details: `Invalid format for field: ${error.path}`
+      });
+    }
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        error: 'Duplicate application',
+        details: 'You have already applied for this job'
+      });
+    }
+    res.status(500).json({ 
+      error: 'Server error',
+      details: 'An unexpected error occurred while submitting your application'
+    });
   }
 });
 

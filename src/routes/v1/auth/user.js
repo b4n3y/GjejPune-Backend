@@ -17,10 +17,34 @@ router.post('/register', authLimiter, async (req, res) => {
   try {
     const { email, password, username, firstName, lastName, phoneNumber, interests } = req.body;
 
+    // Validate required fields
+    const requiredFields = { 
+      email: email?.trim(), 
+      password: password?.trim(), 
+      username: username?.trim(), 
+      firstName: firstName?.trim(), 
+      lastName: lastName?.trim(), 
+      phoneNumber: phoneNumber?.trim() 
+    };
+    
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value)
+      .map(([field]) => field);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: `The following fields are required: ${missingFields.join(', ')}`
+      });
+    }
+
     // Validate password
     const validation = validatePassword(password);
     if (!validation.isValid) {
-      return res.status(400).json({ errors: validation.errors });
+      return res.status(400).json({ 
+        error: 'Password validation failed',
+        details: validation.errors 
+      });
     }
 
     // Check if user already exists
@@ -33,7 +57,15 @@ router.post('/register', authLimiter, async (req, res) => {
     });
 
     if (existingUser) {
-      return res.status(400).json({ error: 'Email, username, or phone number already registered' });
+      let duplicateField = '';
+      if (existingUser.email === email) duplicateField = 'email';
+      else if (existingUser.username === username) duplicateField = 'username';
+      else if (existingUser.phoneNumber === phoneNumber) duplicateField = 'phone number';
+      
+      return res.status(400).json({ 
+        error: 'Account already exists',
+        details: `An account with this ${duplicateField} already exists`
+      });
     }
 
     // Create new user
@@ -69,22 +101,36 @@ router.post('/register', authLimiter, async (req, res) => {
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        error: 'Missing credentials',
+        details: 'Both email and password are required'
+      });
+    }
+
     const user = await User.findOne({ email });
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        details: 'No account found with this email address'
+      });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        details: 'Incorrect password'
+      });
     }
 
     // Check email verification
     if (!user.isEmailVerified) {
       return res.status(403).json({
         error: 'Email not verified',
-        message: 'Please verify your email address before logging in. Check your inbox for the verification link.'
+        details: 'Please verify your email address before logging in. Check your inbox for the verification link.'
       });
     }
 
@@ -154,28 +200,86 @@ router.patch('/profile', auth, upload.fields([
     const updates = {};
     let needsPhoneCheck = false;
 
-    // Batch basic field updates
-    if (firstName) updates.firstName = firstName.trim();
-    if (lastName) updates.lastName = lastName.trim();
-    if (phoneNumber && phoneNumber !== req.user?.phoneNumber) {
-      updates.phoneNumber = phoneNumber.trim();
-      needsPhoneCheck = true;
+    // Validate and sanitize inputs
+    if (firstName !== undefined) {
+      if (!firstName.trim()) {
+        return res.status(400).json({
+          error: 'Invalid input',
+          details: 'First name cannot be empty'
+        });
+      }
+      updates.firstName = firstName.trim();
+    }
+
+    if (lastName !== undefined) {
+      if (!lastName.trim()) {
+        return res.status(400).json({
+          error: 'Invalid input',
+          details: 'Last name cannot be empty'
+        });
+      }
+      updates.lastName = lastName.trim();
+    }
+
+    if (phoneNumber !== undefined) {
+      if (!phoneNumber.trim()) {
+        return res.status(400).json({
+          error: 'Invalid input',
+          details: 'Phone number cannot be empty'
+        });
+      }
+      if (phoneNumber !== req.user?.phoneNumber) {
+        updates.phoneNumber = phoneNumber.trim();
+        needsPhoneCheck = true;
+      }
     }
 
     // Handle interests update
-    if (interests) {
-      const interestIds = JSON.parse(interests);
+    if (interests !== undefined) {
+      let interestIds;
+      try {
+        interestIds = JSON.parse(interests);
+      } catch (error) {
+        return res.status(400).json({
+          error: 'Invalid format',
+          details: 'Interests must be a valid JSON array'
+        });
+      }
+
       if (!Array.isArray(interestIds)) {
-        return res.status(400).json({ error: 'Interests must be an array' });
+        return res.status(400).json({
+          error: 'Invalid format',
+          details: 'Interests must be an array'
+        });
       }
+
       if (interestIds.length > 3) {
-        return res.status(400).json({ error: 'Maximum 3 interests allowed' });
+        return res.status(400).json({
+          error: 'Validation error',
+          details: 'Maximum 3 interests allowed'
+        });
       }
-      if (interestIds.length === new Set(interestIds).size) {
-        updates.interests = interestIds;
-      } else {
-        return res.status(400).json({ error: 'Duplicate interests are not allowed' });
+
+      if (interestIds.length !== new Set(interestIds).size) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: 'Duplicate interests are not allowed'
+        });
       }
+
+      // Validate that all interests exist
+      const existingInterests = await JobCategory.find({
+        _id: { $in: interestIds }
+      }).select('_id').lean();
+
+      if (existingInterests.length !== interestIds.length) {
+        return res.status(400).json({
+          error: 'Invalid interests',
+          details: 'One or more selected interests do not exist'
+        });
+      }
+
+      updates.interests = interestIds;
     }
 
     // Check phone number uniqueness if changed
@@ -191,7 +295,10 @@ router.patch('/profile', auth, upload.fields([
       ]);
 
       if (existingUser || existingBusiness) {
-        return res.status(400).json({ error: 'Phone number already registered' });
+        return res.status(400).json({
+          error: 'Duplicate phone',
+          details: 'This phone number is already registered by another account'
+        });
       }
     }
 
@@ -203,23 +310,43 @@ router.patch('/profile', auth, upload.fields([
       currentUser = await User.findById(req.userId).select('avatar cv').lean();
       
       if (req.files.avatar) {
+        if (!req.files.avatar[0].mimetype.startsWith('image/')) {
+          return res.status(400).json({
+            error: 'Invalid file',
+            details: 'Avatar must be an image file'
+          });
+        }
         uploadPromises.push(
           (async () => {
-            if (currentUser.avatar) {
-              await deleteFile(currentUser.avatar).catch(console.error);
+            try {
+              if (currentUser.avatar) {
+                await deleteFile(currentUser.avatar).catch(console.error);
+              }
+              updates.avatar = await uploadFile(req.files.avatar[0], 'avatars');
+            } catch (error) {
+              throw new Error('Failed to upload avatar');
             }
-            updates.avatar = await uploadFile(req.files.avatar[0], 'avatars');
           })()
         );
       }
 
       if (req.files.cv) {
+        if (!req.files.cv[0].mimetype.includes('pdf')) {
+          return res.status(400).json({
+            error: 'Invalid file',
+            details: 'CV must be a PDF file'
+          });
+        }
         uploadPromises.push(
           (async () => {
-            if (currentUser.cv) {
-              await deleteFile(currentUser.cv).catch(console.error);
+            try {
+              if (currentUser.cv) {
+                await deleteFile(currentUser.cv).catch(console.error);
+              }
+              updates.cv = await uploadFile(req.files.cv[0], 'cvs');
+            } catch (error) {
+              throw new Error('Failed to upload CV');
             }
-            updates.cv = await uploadFile(req.files.cv[0], 'cvs');
           })()
         );
       }
@@ -227,7 +354,14 @@ router.patch('/profile', auth, upload.fields([
 
     // Wait for all file uploads to complete
     if (uploadPromises.length > 0) {
-      await Promise.all(uploadPromises);
+      try {
+        await Promise.all(uploadPromises);
+      } catch (error) {
+        return res.status(500).json({
+          error: 'Upload failed',
+          details: error.message
+        });
+      }
     }
 
     // Update user profile with all changes at once
@@ -240,6 +374,13 @@ router.patch('/profile', auth, upload.fields([
         select: 'firstName lastName email username phoneNumber avatar cv interests'
       }
     ).populate('interests', 'name');
+
+    if (!user) {
+      return res.status(404).json({
+        error: 'Not found',
+        details: 'User not found'
+      });
+    }
 
     // Clean up and send response
     const response = {
@@ -266,7 +407,16 @@ router.patch('/profile', auth, upload.fields([
         details: Object.values(error.errors).map(err => err.message)
       });
     }
-    res.status(500).json({ error: 'Server error' });
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        error: 'Invalid format',
+        details: `Invalid format for field: ${error.path}`
+      });
+    }
+    res.status(500).json({
+      error: 'Server error',
+      details: 'An unexpected error occurred while updating your profile'
+    });
   }
 });
 

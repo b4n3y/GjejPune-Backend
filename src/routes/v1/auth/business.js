@@ -18,14 +18,44 @@ router.post('/register', authLimiter, async (req, res) => {
       password,
       businessName,
       businessType,
-      contactPerson,
-      address
+      contactPerson = {},
+      address = {}
     } = req.body;
+
+    // Validate required fields
+    const requiredFields = { 
+      email: email?.trim(), 
+      password: password?.trim(), 
+      businessName: businessName?.trim(), 
+      businessType: businessType?.trim(),
+      'contact person name': contactPerson?.name?.trim(),
+      'contact person phone': contactPerson?.phoneNumber?.trim(),
+      'contact person position': contactPerson?.position?.trim(),
+      'address street': address?.street?.trim(),
+      'address city': address?.city?.trim(),
+      'address state': address?.state?.trim(),
+      'address zip code': address?.zipCode?.trim(),
+      'address country': address?.country?.trim()
+    };
+    
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value)
+      .map(([field]) => field);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: `The following fields are required: ${missingFields.join(', ')}`
+      });
+    }
 
     // Validate password
     const validation = validatePassword(password);
     if (!validation.isValid) {
-      return res.status(400).json({ errors: validation.errors });
+      return res.status(400).json({ 
+        error: 'Password validation failed',
+        details: validation.errors 
+      });
     }
 
     // Check if business already exists
@@ -38,13 +68,24 @@ router.post('/register', authLimiter, async (req, res) => {
     });
 
     if (existingBusiness) {
-      return res.status(400).json({ error: 'Email, business name, or phone number already registered' });
+      let duplicateField = '';
+      if (existingBusiness.email === email) duplicateField = 'email';
+      else if (existingBusiness.businessName === businessName) duplicateField = 'business name';
+      else if (existingBusiness.contactPerson.phoneNumber === contactPerson.phoneNumber) duplicateField = 'phone number';
+      
+      return res.status(400).json({ 
+        error: 'Business already exists',
+        details: `A business with this ${duplicateField} is already registered`
+      });
     }
 
     // Check if phone number exists in User collection
     const existingUser = await User.findOne({ phoneNumber: contactPerson.phoneNumber });
     if (existingUser) {
-      return res.status(400).json({ error: 'Phone number already registered by a user' });
+      return res.status(400).json({ 
+        error: 'Phone number in use',
+        details: 'This phone number is already registered by a user account'
+      });
     }
 
     // Create new business
@@ -85,27 +126,43 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    if (!email || !password) {
+      return res.status(400).json({ 
+        error: 'Missing credentials',
+        details: 'Both email and password are required'
+      });
+    }
+
     // Check if email is registered as user
     const user = await User.findOne({ email });
     if (user) {
-      return res.status(401).json({ error: 'Please use user login' });
+      return res.status(401).json({ 
+        error: 'Invalid account type',
+        details: 'This email is registered as a user account. Please use the user login endpoint.'
+      });
     }
 
     const business = await Business.findOne({ email });
     if (!business) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        details: 'No business account found with this email address'
+      });
     }
 
     const isMatch = await business.comparePassword(password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        details: 'Incorrect password'
+      });
     }
 
     // Check email verification
     if (!business.isEmailVerified) {
       return res.status(403).json({
         error: 'Email not verified',
-        message: 'Please verify your email address before logging in. Check your inbox for the verification link.'
+        details: 'Please verify your email address before logging in. Check your inbox for the verification link.'
       });
     }
 
@@ -113,7 +170,7 @@ router.post('/login', authLimiter, async (req, res) => {
     if (!business.approved) {
       return res.status(403).json({ 
         error: 'Account pending approval',
-        message: 'Your business account is pending approval. Please wait for administrator approval.'
+        details: 'Your business account is pending approval. Please wait for administrator approval.'
       });
     }
 
