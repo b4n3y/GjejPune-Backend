@@ -143,7 +143,7 @@ router.get('/conversations', auth, async (req, res) => {
             as: 'unreadCount'
           }
         },
-        // Lookup minimal user details
+
         {
           $lookup: {
             from: 'users',
