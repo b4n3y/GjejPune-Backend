@@ -1,15 +1,15 @@
-const AWS = require('aws-sdk');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const path = require('path');
 
-// Configure AWS SDK for DigitalOcean Spaces
-const spacesEndpoint = new AWS.Endpoint(process.env.DO_SPACES_ENDPOINT);
-const s3 = new AWS.S3({
-  endpoint: spacesEndpoint,
-  accessKeyId: process.env.DO_SPACES_KEY,
-  secretAccessKey: process.env.DO_SPACES_SECRET,
+// Configure AWS SDK v3 for DigitalOcean Spaces
+const s3Client = new S3Client({
+  endpoint: `https://${process.env.DO_SPACES_ENDPOINT}`,
   region: process.env.DO_SPACES_REGION,
-  signatureVersion: 'v4'
+  credentials: {
+    accessKeyId: process.env.DO_SPACES_KEY,
+    secretAccessKey: process.env.DO_SPACES_SECRET
+  }
 });
 
 // Generate unique filename
@@ -36,7 +36,7 @@ const uploadFile = async (file, folder) => {
   };
 
   try {
-    await s3.upload(params).promise();
+    await s3Client.send(new PutObjectCommand(params));
     return `https://${process.env.DO_SPACES_BUCKET}.${process.env.DO_SPACES_ENDPOINT}/${filePath}`;
   } catch (error) {
     console.error('S3 upload error:', error);
@@ -55,7 +55,7 @@ const deleteFile = async (fileUrl) => {
       Key: key
     };
 
-    await s3.deleteObject(params).promise();
+    await s3Client.send(new DeleteObjectCommand(params));
   } catch (error) {
     console.error('S3 delete error:', error);
     throw new Error('Failed to delete file');

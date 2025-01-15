@@ -3,7 +3,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { sanitizeMiddleware, securityHeaders } = require('./middleware/security');
-const { apiLimiter } = require('./middleware/rateLimiter');
+const { 
+  apiLimiter, 
+  authLimiter, 
+  applicationLimiter 
+} = require('./middleware/rateLimiter');
 const userRoutes = require('./routes/v1/auth/user');
 const businessRoutes = require('./routes/v1/auth/business');
 const usersListRoute = require('./routes/v1/users');
@@ -18,11 +22,15 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy (needed for DigitalOcean App Platform)
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'admin-token']
+  allowedHeaders: ['Content-Type', 'Authorization', 'admin-token'],
+  credentials: true // Enable credentials for production CORS
 }));
 app.use(express.json({ limit: '10kb' })); // Limit payload size
 
@@ -35,14 +43,16 @@ app.use(express.static(publicPath, {
 
 app.use(sanitizeMiddleware);
 app.use(securityHeaders);
-app.use(apiLimiter); // Apply rate limiting to all routes
+
+// Apply rate limiting
+app.use(apiLimiter); // This will handle both GET and mutation rate limits
+app.use('/v1/auth', authLimiter); // Specific limit for auth routes
+app.use('/v1/jobs/:jobId/apply', applicationLimiter); // Specific limit for job applications
 
 // Database connection with security options
 mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  autoIndex: true,
-  maxPoolSize: 10,
+  maxPoolSize: process.env.NODE_ENV === 'production' ? 50 : 10,
+  minPoolSize: process.env.NODE_ENV === 'production' ? 10 : 1,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
   family: 4
@@ -130,6 +140,6 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
 }); 

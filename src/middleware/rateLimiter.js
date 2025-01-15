@@ -1,82 +1,98 @@
 const rateLimit = require('express-rate-limit');
 
-const authLimiter = rateLimit({
-  windowMs: process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000,
-  max: process.env.RATE_LIMIT_MAX_REQUESTS || 5,
-  message: {
-    error: 'Too many login/register attempts. Please try again after 15 minutes.'
-  },
+const windowMs = process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000; // 15 minutes default
+
+// Function to get real IP address
+const getRealIp = (req) => {
+  // Priority order for IP headers:
+  // 1. CF-Connecting-IP (Cloudflare)
+  // 2. X-Forwarded-For (first IP in the list if present)
+  // 3. req.ip (fallback)
+  
+  if (req.headers['cf-connecting-ip']) {
+    return req.headers['cf-connecting-ip'];
+  }
+
+  if (req.headers['x-forwarded-for']) {
+    // Get the first IP in the list (client's original IP)
+    const forwardedIps = req.headers['x-forwarded-for'].split(',');
+    return forwardedIps[0].trim();
+  }
+
+  return req.ip;
+};
+
+// Common configuration for handling proxy IPs
+const commonConfig = {
+  windowMs,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: false
+  trustProxy: true,
+  keyGenerator: getRealIp
+};
+
+// Rate limiter for authentication endpoints
+const authLimiter = rateLimit({
+  ...commonConfig,
+  max: process.env.AUTH_RATE_LIMIT_MAX || 5,
+  message: {
+    error: 'Too many login/register attempts. Please try again after 15 minutes.'
+  }
+});
+
+// Rate limiter for GET requests
+const getRequestLimiter = rateLimit({
+  ...commonConfig,
+  max: process.env.GET_RATE_LIMIT_MAX || 100,
+  message: {
+    error: 'Too many GET requests. Please try again later.'
+  },
+  skip: (req) => req.method !== 'GET'
+});
+
+// Rate limiter for mutation requests (POST/PATCH/DELETE)
+const mutationLimiter = rateLimit({
+  ...commonConfig,
+  max: process.env.MUTATION_RATE_LIMIT_MAX || 50,
+  message: {
+    error: 'Too many modification requests. Please try again later.'
+  },
+  skip: (req) => !['POST', 'PATCH', 'DELETE'].includes(req.method)
 });
 
 // Rate limiter for job applications
 const applicationLimiter = rateLimit({
+  ...commonConfig,
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Max 10 applications per hour
-  message: { error: 'Too many job applications. Please try again later.' }
+  max: process.env.JOB_APPLY_RATE_LIMIT_MAX || 10,
+  message: { 
+    error: 'Too many job applications. Please try again later.' 
+  }
 });
 
-// Rate limiter for general API endpoints
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per 15 minutes
-  message: { error: 'Too many requests. Please try again later.' }
-});
-
-// Rate limiter for email verification (IP-based)
+// Email verification rate limiter
 const emailVerificationIpLimiter = rateLimit({
+  ...commonConfig,
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 3, // Max 3 verification emails per IP per hour
-  message: { error: 'Too many verification attempts from this IP. Please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: false
+  message: { 
+    error: 'Too many verification attempts from this IP. Please try again later.' 
+  }
 });
 
-// Store for tracking email-based rate limiting
-const emailVerificationStore = new Map();
-
-// Email-based rate limiter function
-const emailVerificationLimiter = (email) => {
-  const now = Date.now();
-  const hourAgo = now - (60 * 60 * 1000);
-  
-  // Clean up old entries
-  for (const [key, value] of emailVerificationStore.entries()) {
-    if (value.timestamp < hourAgo) {
-      emailVerificationStore.delete(key);
-    }
+// Combined API limiter that applies different limits based on request type
+const apiLimiter = (req, res, next) => {
+  if (req.method === 'GET') {
+    return getRequestLimiter(req, res, next);
   }
-  
-  const emailRecord = emailVerificationStore.get(email) || { count: 0, timestamp: now };
-  
-  if (emailRecord.timestamp < hourAgo) {
-    emailRecord.count = 1;
-    emailRecord.timestamp = now;
-  } else if (emailRecord.count >= 3) {
-    return false;
-  } else {
-    emailRecord.count += 1;
-  }
-  
-  emailVerificationStore.set(email, emailRecord);
-  return true;
-};
-
-// Validate email domain
-const validateEmailDomain = (email) => {
-  const allowedDomains = ['gmail.com', 'icloud.com', 'outlook.com'];
-  const domain = email.split('@')[1]?.toLowerCase();
-  return allowedDomains.includes(domain);
+  return mutationLimiter(req, res, next);
 };
 
 module.exports = {
   authLimiter,
+  getRequestLimiter,
+  mutationLimiter,
   applicationLimiter,
-  apiLimiter,
   emailVerificationIpLimiter,
-  emailVerificationLimiter,
-  validateEmailDomain
+  apiLimiter
 }; 
