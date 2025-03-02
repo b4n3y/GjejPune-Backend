@@ -1,6 +1,6 @@
 # Job Portal API
 
-A job board backend build with Express Js and a Mongo DB database with Mongose, Email Verification, Role based auth rate limiting, and advanced security features.
+A job board backend build with Express Js and a Mongo DB database with Mongose, Email Verification, Role based auth rate limiting, and advanced security features. It also has support for s3 object storage like aws s3 buckets and digital ocean spaces
 
 ## Features
 
