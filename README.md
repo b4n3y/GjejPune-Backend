@@ -1,6 +1,6 @@
 # Job Portal API
 
-A secure and feature-rich job portal API with email verification, rate limiting, and advanced security features.
+A job board backend build with Express Js and a Mongo DB database with Mongose, Email Verification, Role based auth rate limiting, and advanced security features.
 
 ## Features
 
